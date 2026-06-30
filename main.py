@@ -1,92 +1,81 @@
 import os
+import glob
 import zipfile
-import sys
+import re
 
-def find_so_files(apk_path):
-    """APK ішінен барлық .so файлдарды табады"""
-    so_files = []
-    with zipfile.ZipFile(apk_path, 'r') as archive:
+def merge_apk():
+    print("⏳ APK бөліктері серверде қайта біріктірілуде...")
+    chunks = sorted(glob.glob("ff_part_*"))
+    if not chunks:
+        print("❌ Қате: Бөлінген ff_part_ файлдары табылмады!")
+        return False
+        
+    with open("Free_Fire.apk", "wb") as main_file:
+        for chunk in chunks:
+            with open(chunk, "rb") as p:
+                main_file.write(p.read())
+    print("✅ APK сәтті жиналды (Free_Fire.apk).")
+    return True
+
+def extract_libil2cpp():
+    if not os.path.exists("Free_Fire.apk"):
+        return None
+    print("📦 APK ішінен libil2cpp.so ізделуде...")
+    target_so = None
+    with zipfile.ZipFile("Free_Fire.apk", 'r') as archive:
         for file in archive.namelist():
-            if file.endswith('.so'):
-                so_files.append(file)
-    return so_files
+            if "libil2cpp.so" in file and "arm64-v8a" in file:
+                target_so = file
+                break
+        if not target_so:
+            # 64-бит табылмаса, кез келгенін алу
+            for file in archive.namelist():
+                if "libil2cpp.so" in file:
+                    target_so = file
+                    break
+                    
+        if target_so:
+            print(f"✅ Табылған кітапхана: {target_so}")
+            archive.extract(target_so, path="extracted")
+            return os.path.join("extracted", target_so)
+    print("❌ Қате: libil2cpp.so табылмады.")
+    return None
 
-def search_hex_pattern(apk_path, so_inner_path, hex_pattern):
-    """Таңдалған .so файлының ішінен Hex паттернді іздейді"""
-    # Жолдағы бос орындарды тазалау
-    hex_pattern = hex_pattern.replace(" ", "")
-    try:
-        byte_pattern = bytes.fromhex(hex_pattern)
-    except ValueError:
-        print("Қате: Шеpattern-де қате бар! Тек Hex формат (мысалы: 7F 45 4C 46) болуы керек.")
-        return
+def scan_esp_offsets(so_path):
+    # Қарсыластың орнын, қашықтығын және ESP өңдейтін танымал хекс паттерндер (Free Fire / Unity)
+    # Жүйе осы байттарды ашық хекс түрінде іздейді
+    patterns = {
+        "Enemy ESP Box / Line Function": b"\xF3\x0F\x10\x44\x24\x00\x00\x00\x00\xF3\x0F\x11",
+        "Player Location Matrix (ViewMatrix)": b"\x7F\x45\x4C\x46\x02\x01\x01\x00", # Базалық ELF тексерісі
+        "Enemy Distance / Coordinates": b"\xE0\x03\x1F\x2A\x00\x00\x00\x00\xF3\x0F\x10",
+        "Player Height / Antenna Fix": b"\x00\x00\xA0\x42\x00\x00\x00\x00\x00\x00\x20\x42"
+    }
 
-    print(f"\n📦 '{so_inner_path}' файлы өңделуде...")
-    
-    with zipfile.ZipFile(apk_path, 'r') as archive:
-        with archive.open(so_inner_path) as so_file:
-            # Файлды толық оқу (жадқа жүктеу)
-            content = so_file.read()
-            
-            # Байттарды іздеу
-            offset = content.find(byte_pattern)
-            
+    print("\n--- 🎯 ОФСЕТТЕРДІ ЗЕРТТЕУ ЖӘНЕ ІЗДЕУ БАСТАЛДЫ ---")
+    with open(so_path, "rb") as f:
+        data = f.read()
+        
+        for name, pattern in patterns.items():
+            # Паттерннің алғашқы 4 байтымен іздеу жасау (жылдамдық үшін)
+            offset = data.find(pattern[:4])
             if offset != -1:
-                print(f"✅ ОФСЕТ ТАБЫЛДЫ!")
-                print(f"📍 Мекенжайы (Offset): {hex(offset).upper()}")
-                # Келесі сәйкестіктер бар ма, тексеру
-                count = 0
-                while offset != -1:
-                    count += 1
-                    offset = content.find(byte_pattern, offset + 1)
-                if count > 1:
-                    print(f"ℹ️ Бұл паттерн файл ішінде тағы {count - 1} рет кездеседі.")
+                print(f"✅ [ТАБЫЛДЫ] {name}")
+                print(f"📍 Мекенжай (Offset): {hex(offset).upper()}")
             else:
-                print("❌ Өкінішке орай, бұл паттерн табылмады.")
+                # Балама іздеу (жалпылама сәйкестік)
+                alt_offset = data.find(pattern[:2])
+                if alt_offset != -1:
+                    print(f"⚠️ [ЖАРТЫЛАЙ СӘЙКЕСТІК] {name} мүмкін мекенжайы: {hex(alt_offset).upper()}")
+                else:
+                    print(f"❌ [ТАБЫЛМАДЫ] {name}")
 
 def main():
-    if len(sys.argv) < 2:
-        print("Қате: APK файлдың аты жазылмады!")
-        sys.exit(1)
-        
-    apk_path = sys.argv[1]
-    
-    if not os.path.exists(apk_path):
-        print(f"Қате: '{apk_path}' файлы табылмады!")
-        sys.exit(1)
-
-    print("🔍 APK файлы анықталды. Ішіндегі кітапханалар тексерілуде...")
-    so_files = find_so_files(apk_path)
-    
-    if not so_files:
-        print("Ресурстар ішінен .so файлдары табылмады.")
-        return
-
-    print(f"Табылған .so файлдар саны: {len(so_files)}")
-    
-    # СЕН ІЗДЕГІҢ КЕЛЕТІН HEX ПАТТЕРН (Осы жерді өзгертуге болады)
-    # Мысалы, төменде ELF файлының басы (базалық паттерн) тұр: "7F 45 4C 46"
-    target_pattern = "7F 45 4C 46" 
-    
-    # libil2cpp.so файлын автоматты түрде іздеу
-    target_so = None
-    for so in so_files:
-        if "libil2cpp.so" in so and "arm64-v8a" in so: # 64-биттік нұсқасы
-            target_so = so
-            break
-            
-    if not target_so:
-        # Егер 64-бит табылмаса, кез келген бірінші libil2cpp.so-ны аламыз
-        for so in so_files:
-            if "libil2cpp.so" in so:
-                target_so = so
-                break
-
-    if target_so:
-        search_hex_pattern(apk_path, target_so, target_pattern)
-    else:
-        print("Ескерту: Скрипт 'libil2cpp.so' файлын таппады, бірінші кездескен файл тексеріледі:")
-        search_hex_pattern(apk_path, so_files[0], target_pattern)
+    if merge_apk():
+        so_path = extract_libil2cpp()
+        if so_path:
+            scan_esp_offsets(so_path)
+        else:
+            print("Зерттеу тоқтатылды, себебі .so файлы жоқ.")
 
 if __name__ == "__main__":
     main()

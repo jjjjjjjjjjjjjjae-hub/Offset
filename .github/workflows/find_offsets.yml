@@ -1,28 +1,23 @@
-name: Find APK Offsets
+name: Find Free Fire Offsets
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main, master ]
 
 jobs:
-  find-offsets:
+  analyze-apk:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository code
+      - name: Репозиторийді жүктеп алу
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Python ортасын орнату
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Download APK from Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Офсеттерді автоматты іздеу
         run: |
-          gh release download v1.0.0 --repo ${{ github.repository }} --pattern "*.apk"
-          ls -lh
-
-      - name: Run Offset Finder
-        run: |
-          python main.py "Free Fire.8.apk"
+          python main.py
